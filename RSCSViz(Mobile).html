@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>3D Row &amp; Column Space Visualizer (Mobile)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<style>
+  html, body { margin: 0; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .view { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; }
+  .view canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+  input[type=number] { -moz-appearance: textfield; }
+  .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .chip { background: #0f172a; border: 1px solid #334155; border-radius: 9999px; padding: 4px 10px; white-space: nowrap; flex: 0 0 auto; }
+  .tab { border: 2px solid #334155; background: #1e293b; color: #94a3b8; }
+  .tab.active[data-tab=row] { border-color: #fb923c; color: #fdba74; background: rgba(251,146,60,.12); }
+  .tab.active[data-tab=col] { border-color: #38bdf8; color: #7dd3fc; background: rgba(56,189,248,.12); }
+  /* Matrix panel: overlay drawer on phones / short landscape, inline on large screens */
+  #panel { position: absolute; top: 100%; left: 0; right: 0; max-height: calc(100vh - 150px); max-height: calc(100dvh - 150px);
+           overflow-y: auto; -webkit-overflow-scrolling: touch; box-shadow: 0 14px 28px rgba(0,0,0,.45); }
+  @media (min-width: 768px) and (min-height: 620px) {
+    #panel { position: static; max-height: none; box-shadow: none; }
+  }
+</style>
+</head>
+<body class="bg-slate-900 text-slate-100 flex flex-col overflow-hidden" style="height:100vh;height:100dvh;">
+
+  <!-- ===== Top: header, live stats chips, collapsible matrix panel ===== -->
+  <div id="top" class="relative z-40 shrink-0 bg-slate-800 border-b border-slate-700"
+       style="padding-top:env(safe-area-inset-top);padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)">
+    <div class="flex items-center gap-2 px-3 py-2">
+      <div class="min-w-0 flex-1">
+        <h1 class="text-sm sm:text-base font-bold leading-tight truncate">Row &amp; Column Space · 3×3 Matrix</h1>
+        <p class="text-[11px] sm:text-xs text-slate-400 leading-tight truncate">A : ℝ³ → ℝ³ &nbsp;·&nbsp; drag the glowing vector tips to edit A</p>
+      </div>
+      <button id="btnPanel" class="shrink-0 min-h-[44px] px-4 rounded-lg bg-sky-600 active:bg-sky-700 text-sm font-semibold">Matrix ▾</button>
+    </div>
+
+    <div class="flex gap-2 overflow-x-auto no-scrollbar px-3 pb-2 text-xs sm:text-sm">
+      <div class="chip"><span class="text-slate-400">Rank</span> <b id="rank" class="text-base">–</b></div>
+      <div class="chip"><span class="text-slate-400">det(A)</span> <b id="det" class="text-base">–</b></div>
+      <div class="chip"><span class="text-orange-300">dim C(Aᵀ)</span> <b id="dimRow" class="text-base">–</b></div>
+      <div class="chip"><span class="text-cyan-300">dim C(A)</span> <b id="dimCol" class="text-base">–</b></div>
+      <div class="chip"><span class="text-slate-400">dim N(A)</span> <b id="dimNull" class="text-base">–</b></div>
+    </div>
+
+    <section id="panel" class="hidden bg-slate-800/95 backdrop-blur border-t border-slate-700 px-3 py-3"
+             style="padding-left:max(0.75rem,env(safe-area-inset-left));padding-right:max(0.75rem,env(safe-area-inset-right))">
+      <div class="flex flex-wrap gap-x-8 gap-y-4">
+        <div>
+          <div class="text-xs text-slate-400 mb-1">Matrix A (tap an entry to edit)</div>
+          <div class="flex items-center gap-1">
+            <span class="text-5xl font-extralight text-slate-400 select-none leading-none">[</span>
+            <div id="matGrid" class="grid grid-cols-3 gap-2" style="width:min(250px,64vw)"></div>
+            <span class="text-5xl font-extralight text-slate-400 select-none leading-none">]</span>
+          </div>
+        </div>
+        <div class="flex-1 min-w-[230px] space-y-3">
+          <div>
+            <div class="text-xs text-slate-400 mb-1">Presets</div>
+            <div class="flex flex-wrap gap-2">
+              <button data-p="2,1,0,1,2,1,0,1,2" class="preset min-h-[44px] px-3 rounded-lg bg-slate-700 active:bg-slate-600 text-sm">Default</button>
+              <button data-p="1,2,0,0,1,1,1,3,1" class="preset min-h-[44px] px-3 rounded-lg bg-slate-700 active:bg-slate-600 text-sm">Rank 2</button>
+              <button data-p="1,2,1,2,4,2,-1,-2,-1" class="preset min-h-[44px] px-3 rounded-lg bg-slate-700 active:bg-slate-600 text-sm">Rank 1</button>
+              <button data-p="1,0,0,0,1,0,0,0,1" class="preset min-h-[44px] px-3 rounded-lg bg-slate-700 active:bg-slate-600 text-sm">Identity</button>
+              <button data-p="0,0,0,0,0,0,0,0,0" class="preset min-h-[44px] px-3 rounded-lg bg-slate-700 active:bg-slate-600 text-sm">Zero</button>
+            </div>
+          </div>
+          <div class="text-sm text-slate-200 space-y-1">
+            <label class="flex items-center gap-3 min-h-[40px]"><input id="snap" type="checkbox" checked class="w-5 h-5 accent-sky-400"> Snap dragged tips to 0.5 grid</label>
+            <label class="flex items-center gap-3 min-h-[40px]"><input id="syncCam" type="checkbox" checked class="w-5 h-5 accent-sky-400"> Sync both cameras</label>
+          </div>
+          <p id="note" class="text-xs text-slate-300"></p>
+          <p class="text-[11px] text-slate-500">Touch: 1 finger rotates · 2 fingers pinch-zoom &amp; pan · drag a glowing tip to edit a vector.
+            Mouse: left-drag rotate · right-drag pan · wheel zoom.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ===== View tabs (phones only) ===== -->
+  <nav id="tabs" class="md:hidden shrink-0 grid grid-cols-2 gap-2 px-2 pt-2"
+       style="padding-left:max(0.5rem,env(safe-area-inset-left));padding-right:max(0.5rem,env(safe-area-inset-right))">
+    <button data-tab="row" class="tab active min-h-[44px] rounded-lg text-sm font-semibold">Row space C(Aᵀ)</button>
+    <button data-tab="col" class="tab min-h-[44px] rounded-lg text-sm font-semibold">Column space C(A)</button>
+  </nav>
+
+  <!-- ===== 3D views (fill the remaining screen) ===== -->
+  <main class="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-2 gap-2 p-2"
+        style="grid-template-rows:minmax(0,1fr);padding-bottom:max(0.5rem,env(safe-area-inset-bottom));padding-left:max(0.5rem,env(safe-area-inset-left));padding-right:max(0.5rem,env(safe-area-inset-right))">
+    <div id="rowWrap" class="relative min-h-0 md:block rounded-xl overflow-hidden bg-slate-950">
+      <div id="rowView" class="view absolute inset-0"></div>
+      <button class="resetBtn absolute top-2 right-2 z-10 w-11 h-11 rounded-full bg-slate-800/80 active:bg-slate-700 text-lg" title="Reset camera">⟲</button>
+      <div id="rowLegend" class="absolute left-2 bottom-2 z-10 pointer-events-none flex flex-col gap-0.5 font-mono text-[11px] leading-tight bg-slate-900/70 rounded px-2 py-1"></div>
+    </div>
+    <div id="colWrap" class="relative min-h-0 md:block rounded-xl overflow-hidden bg-slate-950 hidden">
+      <div id="colView" class="view absolute inset-0"></div>
+      <button class="resetBtn absolute top-2 right-2 z-10 w-11 h-11 rounded-full bg-slate-800/80 active:bg-slate-700 text-lg" title="Reset camera">⟲</button>
+      <div id="colLegend" class="absolute left-2 bottom-2 z-10 pointer-events-none flex flex-col gap-0.5 font-mono text-[11px] leading-tight bg-slate-900/70 rounded px-2 py-1"></div>
+    </div>
+  </main>
+
+  <div id="hint" class="fixed left-1/2 -translate-x-1/2 z-50 bg-slate-700/95 text-xs px-3 py-2 rounded-lg shadow-lg text-center transition-opacity"
+       style="bottom:calc(env(safe-area-inset-bottom) + 64px);max-width:90vw">
+    1 finger: rotate · 2 fingers: pinch &amp; pan · drag a glowing tip to edit
+  </div>
+
+<script>
+(function () {
+  'use strict';
+  const AXIS = 6;          // half-length of axes / grid / drag clamp
+  const SNAP = 0.5;
+  const COARSE = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  const V3 = THREE.Vector3;
+
+  // ---------------- Matrix state ----------------
+  let M = [[2, 1, 0], [1, 2, 1], [0, 1, 2]];
+
+  const inputs = [];
+  const grid = document.getElementById('matGrid');
+  for (let i = 0; i < 3; i++) {
+    inputs.push([]);
+    for (let j = 0; j < 3; j++) {
+      const inp = document.createElement('input');
+      inp.type = 'number';            // iOS shows the numbers & punctuation keyboard (includes minus)
+      inp.step = '0.5';
+      inp.value = M[i][j];
+      inp.setAttribute('aria-label', 'a' + (i + 1) + (j + 1));
+      // text-[18px] (>= 16px) prevents iOS Safari from auto-zooming on focus
+      inp.className = 'w-full min-h-[48px] text-center text-[18px] bg-slate-900 border border-slate-600 rounded-lg px-1 text-white focus:outline-none focus:border-sky-400';
+      inp.addEventListener('input', onTyped);
+      inp.addEventListener('focus', () => { try { inp.select(); } catch (e) {} });
+      grid.appendChild(inp);
+      inputs[i].push(inp);
+    }
+  }
+
+  function fmt(x) {
+    let v = Math.round(x * 1000) / 1000;
+    if (Object.is(v, -0) || Math.abs(v) < 1e-9) v = 0;
+    return String(v);
+  }
+
+  function analyze(A) {
+    const det =
+      A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1]) -
+      A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0]) +
+      A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
+    const a = A.map(r => r.slice());
+    let maxAbs = 0;
+    a.forEach(r => r.forEach(x => { maxAbs = Math.max(maxAbs, Math.abs(x)); }));
+    const tol = 1e-8 * Math.max(1, maxAbs);
+    let rank = 0;
+    for (let col = 0; col < 3 && rank < 3; col++) {
+      let p = rank, best = Math.abs(a[rank][col]);
+      for (let r = rank + 1; r < 3; r++) if (Math.abs(a[r][col]) > best) { best = Math.abs(a[r][col]); p = r; }
+      if (best <= tol) continue;
+      [a[rank], a[p]] = [a[p], a[rank]];
+      for (let r = rank + 1; r < 3; r++) {
+        const f = a[r][col] / a[rank][col];
+        for (let c = col; c < 3; c++) a[r][c] -= f * a[rank][c];
+      }
+      rank++;
+    }
+    return { rank, det: Math.abs(det) < 1e-9 * Math.max(1, maxAbs * maxAbs * maxAbs) ? 0 : det };
+  }
+
+  // ---------------- Three.js helpers ----------------
+  function makeLabel(base, sub, color, scale) {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 128;
+    const g = c.getContext('2d');
+    g.textBaseline = 'middle';
+    g.font = 'bold 64px sans-serif';
+    const wBase = g.measureText(base).width;
+    g.font = 'bold 40px sans-serif';
+    const wSub = sub ? g.measureText(sub).width : 0;
+    const x = (256 - (wBase + wSub)) / 2;
+    g.lineWidth = 8; g.strokeStyle = 'rgba(15,23,42,0.9)'; g.fillStyle = color;
+    g.font = 'bold 64px sans-serif';
+    g.strokeText(base, x, 62); g.fillText(base, x, 62);
+    if (sub) {
+      g.font = 'bold 40px sans-serif';
+      g.strokeText(sub, x + wBase + 2, 84); g.fillText(sub, x + wBase + 2, 84);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+    const s = scale || 1;
+    sp.scale.set(1.6 * s, 0.8 * s, 1);
+    sp.renderOrder = 10;
+    return sp;
+  }
+
+  function makeArrow(color) {
+    const g = new THREE.Group();
+    const shaftGeo = new THREE.CylinderGeometry(0.04, 0.04, 1, 10); shaftGeo.translate(0, 0.5, 0);
+    const headGeo = new THREE.ConeGeometry(0.13, 1, 14); headGeo.translate(0, 0.5, 0);
+    const mat = new THREE.MeshBasicMaterial({ color });
+    const shaft = new THREE.Mesh(shaftGeo, mat), head = new THREE.Mesh(headGeo, mat);
+    g.add(shaft, head);
+    g.userData = { shaft, head };
+    return g;
+  }
+
+  const UP = new V3(0, 1, 0);
+  function setArrow(g, v) {
+    const len = v.length();
+    if (len < 1e-6) { g.visible = false; return; }
+    g.visible = true;
+    g.quaternion.setFromUnitVectors(UP, v.clone().multiplyScalar(1 / len));
+    const hl = Math.min(0.4, len * 0.4);
+    g.userData.shaft.scale.set(1, len - hl, 1);
+    g.userData.head.scale.set(1, hl, 1);
+    g.userData.head.position.set(0, len - hl, 0);
+  }
+
+  function clearGroup(g) {
+    g.children.slice().forEach(c => {
+      g.remove(c);
+      if (c.geometry) c.geometry.dispose();
+      if (c.material) { if (c.material.map) c.material.map.dispose(); c.material.dispose(); }
+    });
+  }
+
+  function trisMesh(quads, color, opacity) {
+    const arr = [];
+    quads.forEach(q => {
+      [q[0], q[1], q[2], q[0], q[2], q[3]].forEach(p => arr.push(p.x, p.y, p.z));
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+    const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false });
+    return new THREE.Mesh(geo, mat);
+  }
+
+  function segs(points, color, opacity) {
+    const geo = new THREE.BufferGeometry().setFromPoints(points);
+    return new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity }));
+  }
+
+  function cylinderAlong(dir, length, radius, color, opacity) {
+    const m = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius, radius, length, 12),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false })
+    );
+    m.quaternion.setFromUnitVectors(UP, dir.clone().normalize());
+    return m;
+  }
+
+  // ---------------- View factory ----------------
+  const views = [];
+  let syncing = false;
+  const BASE_FOV = 50;
+
+  function createView(cfg) {
+    const container = document.getElementById(cfg.containerId);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0f172a);
+
+    const camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.1, 200);
+    camera.up.set(0, 0, 1);                       // Z up so axes match the maths convention
+    const home = new V3(9, -9, 6.5);
+    camera.position.copy(home);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true; controls.dampingFactor = 0.1;
+    controls.rotateSpeed = 0.85; controls.zoomSpeed = 0.9; controls.panSpeed = 0.9;
+    controls.screenSpacePanning = true;
+    controls.minDistance = 3; controls.maxDistance = 45;
+    if (THREE.TOUCH) controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+
+    // grid on the XY plane
+    const gridH = new THREE.GridHelper(AXIS * 2, AXIS * 2, 0x475569, 0x1e293b);
+    gridH.rotation.x = Math.PI / 2;
+    scene.add(gridH);
+
+    // axes
+    const axPts = [];
+    [[1, 0, 0], [0, 1, 0], [0, 0, 1]].forEach(d => {
+      axPts.push(new V3(-d[0] * AXIS, -d[1] * AXIS, -d[2] * AXIS), new V3(d[0] * AXIS, d[1] * AXIS, d[2] * AXIS));
+    });
+    scene.add(segs(axPts, 0xcbd5e1, 0.9));
+    [['X', 1, 0, 0], ['Y', 0, 1, 0], ['Z', 0, 0, 1]].forEach(a => {
+      const l = makeLabel(a[0], '', '#e2e8f0', 0.8);
+      l.position.set(a[1] * (AXIS + 0.6), a[2] * (AXIS + 0.6), a[3] * (AXIS + 0.6));
+      scene.add(l);
+    });
+
+    scene.add(new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 10), new THREE.MeshBasicMaterial({ color: 0xffffff })));
+
+    const spanGroup = new THREE.Group();
+    scene.add(spanGroup);
+
+    const HS = COARSE ? 0.26 : 0.18;              // bigger handles on touch screens
+    const arrows = [], handles = [], labels = [];
+    for (let k = 0; k < 3; k++) {
+      const arrow = makeArrow(cfg.colors[k]);
+      scene.add(arrow); arrows.push(arrow);
+
+      const h = new THREE.Mesh(new THREE.SphereGeometry(HS, 16, 16), new THREE.MeshBasicMaterial({ color: cfg.colors[k] }));
+      h.userData.idx = k;
+      const ring = new THREE.Mesh(new THREE.SphereGeometry(HS * 1.6, 16, 16),
+        new THREE.MeshBasicMaterial({ color: cfg.colors[k], transparent: true, opacity: 0.25, depthWrite: false }));
+      h.add(ring);
+      h.userData.ring = ring;
+      scene.add(h); handles.push(h);
+
+      const lab = makeLabel(cfg.base, String(k + 1), cfg.colors[k], 0.8);
+      scene.add(lab); labels.push(lab);
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'absolute top-2 left-3 pointer-events-none';
+    overlay.style.maxWidth = 'calc(100% - 4rem)';
+    overlay.innerHTML = '<div class="font-semibold text-sm" style="color:' + cfg.hex + '">' + cfg.title +
+                        '</div><div class="text-[11px] text-slate-300 ov-sub"></div>';
+    container.appendChild(overlay);
+
+    const view = { kind: cfg.kind, container, scene, camera, renderer, controls, home, arrows, handles, labels, spanGroup, overlay, cfg, _w: 0, _h: 0 };
+
+    controls.addEventListener('change', () => {
+      if (syncing || !document.getElementById('syncCam').checked) return;
+      syncing = true;
+      views.forEach(v => {
+        if (v !== view) {
+          v.camera.position.copy(camera.position);
+          v.controls.target.copy(controls.target);
+          v.controls.update();
+        }
+      });
+      syncing = false;
+    });
+
+    // block the long-press context menu on touch devices
+    container.addEventListener('contextmenu', e => e.preventDefault());
+
+    views.push(view);
+    return view;
+  }
+
+  const rowView = createView({
+    kind: 'row', containerId: 'rowView', base: 'r', hex: '#fb923c',
+    title: 'Row Space C(Aᵀ) ⊆ ℝ³', colors: [0xfb923c, 0xef4444, 0xfacc15], span: 0xfb923c, nullName: 'N(A)'
+  });
+  const colView = createView({
+    kind: 'col', containerId: 'colView', base: 'c', hex: '#38bdf8',
+    title: 'Column Space C(A) ⊆ ℝ³', colors: [0x38bdf8, 0x3b82f6, 0x22d3ee], span: 0x38bdf8, nullName: 'N(A^T)'
+  });
+
+  // ---------------- Responsive sizing ----------------
+  function resizeView(v) {
+    const w = v.container.clientWidth, h = v.container.clientHeight;
+    if (!w || !h) return;                           // hidden tab
+    if (v._w === w && v._h === h) return;
+    v._w = w; v._h = h;
+    v.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    v.renderer.setSize(w, h, false);                // CSS keeps the canvas at 100% of its container
+    const aspect = w / h;
+    v.camera.aspect = aspect;
+    // keep the horizontal field of view in portrait so axes are not cropped
+    if (aspect < 1) {
+      const vf = 2 * Math.atan(Math.tan((BASE_FOV * Math.PI / 180) / 2) / aspect) * 180 / Math.PI;
+      v.camera.fov = Math.min(85, vf);
+    } else {
+      v.camera.fov = BASE_FOV;
+    }
+    v.camera.updateProjectionMatrix();
+  }
+  let resizeQueued = false;
+  function resizeAll() {
+    if (resizeQueued) return;
+    resizeQueued = true;
+    requestAnimationFrame(() => { resizeQueued = false; views.forEach(resizeView); });
+  }
+  window.addEventListener('resize', resizeAll);
+  window.addEventListener('orientationchange', () => { setTimeout(resizeAll, 120); setTimeout(resizeAll, 400); });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', resizeAll);
+  if (window.ResizeObserver) views.forEach(v => new ResizeObserver(resizeAll).observe(v.container));
+
+  // ---------------- Matrix <-> vectors ----------------
+  function getVectors(kind) {
+    const out = [];
+    for (let k = 0; k < 3; k++) {
+      out.push(kind === 'row' ? new V3(M[k][0], M[k][1], M[k][2]) : new V3(M[0][k], M[1][k], M[2][k]));
+    }
+    return out;
+  }
+  function setVector(kind, k, v) {
+    if (kind === 'row') { M[k][0] = v.x; M[k][1] = v.y; M[k][2] = v.z; }
+    else { M[0][k] = v.x; M[1][k] = v.y; M[2][k] = v.z; }
+  }
+
+  const DESC = ['only the origin {0} (dim 0)', 'a line through the origin (dim 1)', 'a plane through the origin (dim 2)', 'all of ℝ³ (dim 3)'];
+
+  function buildSpan(view, vecs, rank) {
+    const g = view.spanGroup, color = view.cfg.span;
+    clearGroup(g);
+    if (rank === 1) {
+      const d = vecs.slice().sort((a, b) => b.length() - a.length())[0];
+      g.add(cylinderAlong(d, AXIS * 2.6, 0.05, color, 0.85));
+      g.add(cylinderAlong(d, AXIS * 2.6, 0.16, color, 0.15));
+    } else if (rank === 2) {
+      let best = -1, pair = [0, 1], nv = null;
+      [[0, 1], [0, 2], [1, 2]].forEach(p => {
+        const c = vecs[p[0]].clone().cross(vecs[p[1]]);
+        if (c.length() > best) { best = c.length(); pair = p; nv = c; }
+      });
+      const n = nv.clone().normalize();
+      const u = vecs[pair[0]].clone().normalize();
+      const w = n.clone().cross(u);
+      const P = (a, b) => u.clone().multiplyScalar(a).addScaledVector(w, b);
+      const S = AXIS;
+      g.add(trisMesh([[P(-S, -S), P(S, -S), P(S, S), P(-S, S)]], color, 0.16));
+      const pts = [];
+      for (let k = -S; k <= S; k++) { pts.push(P(-S, k), P(S, k), P(k, -S), P(k, S)); }
+      g.add(segs(pts, color, 0.22));
+      const vi = vecs[pair[0]], vj = vecs[pair[1]];
+      g.add(trisMesh([[new V3(), vi.clone(), vi.clone().add(vj), vj.clone()]], color, 0.38));
+      const geo = new THREE.BufferGeometry().setFromPoints([n.clone().multiplyScalar(-AXIS), n.clone().multiplyScalar(AXIS)]);
+      const dl = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: 0xcbd5e1, dashSize: 0.25, gapSize: 0.2 }));
+      dl.computeLineDistances();
+      g.add(dl);
+      const lab = makeLabel(view.cfg.nullName, '', '#cbd5e1', 0.8);
+      lab.position.copy(n.clone().multiplyScalar(AXIS + 0.6));
+      g.add(lab);
+    } else if (rank === 3) {
+      const a = vecs[0], b = vecs[1], c = vecs[2];
+      const P = [new V3(), a.clone(), b.clone(), c.clone(), a.clone().add(b), a.clone().add(c), b.clone().add(c), a.clone().add(b).add(c)];
+      const faces = [[0, 1, 4, 2], [0, 1, 5, 3], [0, 2, 6, 3], [3, 5, 7, 6], [2, 4, 7, 6], [1, 4, 7, 5]];
+      g.add(trisMesh(faces.map(f => f.map(i => P[i])), color, 0.16));
+      const edges = [[0, 1], [0, 2], [0, 3], [1, 4], [1, 5], [2, 4], [2, 6], [3, 5], [3, 6], [4, 7], [5, 7], [6, 7]];
+      const pts = [];
+      edges.forEach(e => pts.push(P[e[0]], P[e[1]]));
+      g.add(segs(pts, color, 0.9));
+    }
+  }
+
+  function updateView(view, rank) {
+    const vecs = getVectors(view.kind);
+    const names = view.kind === 'row' ? ['r₁', 'r₂', 'r₃'] : ['c₁', 'c₂', 'c₃'];
+    const hex = view.cfg.colors.map(c => '#' + c.toString(16).padStart(6, '0'));
+    for (let k = 0; k < 3; k++) {
+      setArrow(view.arrows[k], vecs[k]);
+      view.handles[k].position.copy(vecs[k]);
+      view.labels[k].position.copy(vecs[k]).add(new V3(0, 0, 0.6));
+    }
+    buildSpan(view, vecs, rank);
+    view.overlay.querySelector('.ov-sub').textContent = 'span = ' + DESC[rank];
+
+    const legend = document.getElementById(view.kind === 'row' ? 'rowLegend' : 'colLegend');
+    legend.innerHTML = vecs.map((v, k) =>
+      '<span><span style="color:' + hex[k] + ';font-weight:bold">' + names[k] + '</span> = (' +
+      fmt(v.x) + ', ' + fmt(v.y) + ', ' + fmt(v.z) + ')</span>').join('');
+  }
+
+  function writeInputs() {
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) inputs[i][j].value = fmt(M[i][j]);
+  }
+
+  function refresh(syncInputs) {
+    if (syncInputs) writeInputs();
+    const { rank, det } = analyze(M);
+    document.getElementById('rank').textContent = rank;
+    document.getElementById('det').textContent = fmt(det);
+    document.getElementById('dimRow').textContent = rank;
+    document.getElementById('dimCol').textContent = rank;
+    document.getElementById('dimNull').textContent = (3 - rank) + ' = ' + (3 - rank) + ' (Aᵀ)';
+    document.getElementById('note').textContent =
+      'dim C(Aᵀ) = dim C(A) = rank = ' + rank + ' · rank + nullity = ' + rank + ' + ' + (3 - rank) + ' = 3. ' +
+      (rank === 3 ? 'det(A) ≠ 0: A is invertible; both spaces are all of ℝ³ (parallelepiped spanned by the 3 vectors).'
+        : rank === 2 ? 'det(A) = 0: the 3 vectors are coplanar. The dashed line is the orthogonal complement (plane normal).'
+        : rank === 1 ? 'det(A) = 0: all 3 vectors are parallel, so each space collapses to a line.'
+        : 'A is the zero matrix: every vector maps to 0.');
+    views.forEach(v => updateView(v, rank));
+  }
+
+  function onTyped() {
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+      const n = parseFloat(inputs[i][j].value);
+      M[i][j] = isFinite(n) ? n : 0;
+    }
+    refresh(false);
+  }
+
+  document.querySelectorAll('.preset').forEach(b => b.addEventListener('click', () => {
+    const p = b.dataset.p.split(',').map(Number);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) M[i][j] = p[i * 3 + j];
+    refresh(true);
+  }));
+
+  function resetCameras() {
+    syncing = true;
+    views.forEach(v => { v.camera.position.copy(v.home); v.controls.target.set(0, 0, 0); v.controls.update(); });
+    syncing = false;
+  }
+  document.querySelectorAll('.resetBtn').forEach(b => b.addEventListener('click', resetCameras));
+
+  // ---------------- Panel + tabs (mobile UI) ----------------
+  const panel = document.getElementById('panel');
+  const btnPanel = document.getElementById('btnPanel');
+  function setPanel(open) {
+    panel.classList.toggle('hidden', !open);
+    btnPanel.textContent = open ? 'Matrix ▴' : 'Matrix ▾';
+    resizeAll();
+  }
+  btnPanel.addEventListener('click', () => setPanel(panel.classList.contains('hidden')));
+  setPanel(window.innerWidth >= 768 && window.innerHeight >= 620);   // collapsed by default on phones
+
+  const wraps = { row: document.getElementById('rowWrap'), col: document.getElementById('colWrap') };
+  function setTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+    // 'hidden' only wins below md; at md+ the wrapper has md:block so both views show side by side
+    Object.keys(wraps).forEach(k => wraps[k].classList.toggle('hidden', k !== name));
+    resizeAll();
+  }
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => setTab(t.dataset.tab)));
+
+  const hint = document.getElementById('hint');
+  function hideHint() { hint.style.opacity = '0'; hint.style.pointerEvents = 'none'; }
+  setTimeout(hideHint, 8000);
+  hint.addEventListener('click', hideHint);
+
+  // ---------------- Vector dragging (touch + mouse + pen) ----------------
+  // Pointer Events unify touchstart/touchmove/touchend and mouse events; a touch-event fallback
+  // is provided for very old browsers. Hit-testing is done in screen space with a generous
+  // radius so a fingertip can grab a vector tip easily.
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  let drag = null;
+
+  function setRayXY(view, cx, cy) {
+    const r = view.renderer.domElement.getBoundingClientRect();
+    ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+    raycaster.setFromCamera(ndc, view.camera);
+  }
+
+  function pickHandle(view, cx, cy, isTouch) {
+    const r = view.renderer.domElement.getBoundingClientRect();
+    const px = cx - r.left, py = cy - r.top;
+    const thr = isTouch ? 36 : 18;                  // pixels
+    const tmp = new V3();
+    let best = null, bestD = Infinity;
+    view.handles.forEach(h => {
+      tmp.copy(h.position).project(view.camera);
+      if (tmp.z > 1) return;
+      const sx = (tmp.x * 0.5 + 0.5) * r.width, sy = (-tmp.y * 0.5 + 0.5) * r.height;
+      const d = Math.hypot(sx - px, sy - py);
+      if (d < thr && d < bestD) { bestD = d; best = h; }
+    });
+    return best;
+  }
+
+  function startDrag(view, cx, cy, isTouch, pointerId) {
+    const h = pickHandle(view, cx, cy, isTouch);
+    if (!h) return false;
+    setRayXY(view, cx, cy);
+    const camDir = new V3(); view.camera.getWorldDirection(camDir);
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, h.position);
+    const pt = new V3();
+    if (!raycaster.ray.intersectPlane(plane, pt)) return false;
+    drag = { view, idx: h.userData.idx, plane, offset: h.position.clone().sub(pt), pointerId, ring: h.userData.ring };
+    view.controls.enabled = false;                  // stop OrbitControls (mouse, pointer AND touch handlers)
+    drag.ring.material.opacity = 0.65;
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    hideHint();
+    return true;
+  }
+
+  function moveDrag(cx, cy) {
+    if (!drag) return;
+    setRayXY(drag.view, cx, cy);
+    const pt = new V3();
+    if (!raycaster.ray.intersectPlane(drag.plane, pt)) return;
+    pt.add(drag.offset);
+    const snap = document.getElementById('snap').checked;
+    ['x', 'y', 'z'].forEach(k => {
+      let v = Math.max(-AXIS, Math.min(AXIS, pt[k]));
+      if (snap) v = Math.round(v / SNAP) * SNAP;
+      pt[k] = v;
+    });
+    setVector(drag.view.kind, drag.idx, pt);
+    refresh(true);
+  }
+
+  function endDrag() {
+    if (!drag) return;
+    drag.ring.material.opacity = 0.25;
+    drag.view.controls.enabled = true;
+    drag.view.container.style.cursor = 'default';
+    drag = null;
+  }
+
+  views.forEach(view => {
+    if (window.PointerEvent) {
+      // capture phase on the container so we run before OrbitControls
+      view.container.addEventListener('pointerdown', e => {
+        if (drag) { e.stopPropagation(); e.preventDefault(); return; }       // extra finger during a drag
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        if (startDrag(view, e.clientX, e.clientY, e.pointerType !== 'mouse', e.pointerId)) {
+          try { view.renderer.domElement.setPointerCapture(e.pointerId); } catch (err) {}
+          view.container.style.cursor = 'grabbing';
+          e.stopPropagation();
+          e.preventDefault();
+        } else {
+          hideHint();
+        }
+      }, true);
+
+      view.container.addEventListener('pointermove', e => {
+        if (drag || e.pointerType !== 'mouse') return;
+        view.container.style.cursor = pickHandle(view, e.clientX, e.clientY, false) ? 'grab' : 'default';
+      });
+    } else {
+      // Fallback for browsers without Pointer Events: explicit touchstart / touchmove / touchend
+      view.container.addEventListener('touchstart', e => {
+        if (drag) { e.stopPropagation(); e.preventDefault(); return; }
+        const t = e.touches[0];
+        if (e.touches.length === 1 && startDrag(view, t.clientX, t.clientY, true, t.identifier)) {
+          e.stopPropagation(); e.preventDefault();
+        }
+      }, { capture: true, passive: false });
+    }
+  });
+
+  if (window.PointerEvent) {
+    window.addEventListener('pointermove', e => {
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      e.preventDefault();
+      moveDrag(e.clientX, e.clientY);
+    }, { passive: false });
+    const up = e => { if (drag && e.pointerId === drag.pointerId) endDrag(); };
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  } else {
+    window.addEventListener('touchmove', e => {
+      if (!drag) return;
+      e.preventDefault();
+      const t = e.touches[0];
+      moveDrag(t.clientX, t.clientY);
+    }, { passive: false });
+    window.addEventListener('touchend', endDrag);
+    window.addEventListener('touchcancel', endDrag);
+  }
+
+  // ---------------- Render loop ----------------
+  function animate() {
+    requestAnimationFrame(animate);
+    views.forEach(v => {
+      if (!v.container.clientWidth || !v.container.clientHeight) return;   // skip hidden tab (saves mobile GPU)
+      v.controls.update();
+      v.renderer.render(v.scene, v.camera);
+    });
+  }
+
+  refresh(true);
+  resizeAll();
+  animate();
+})();
+</script>
+</body>
+</html>
